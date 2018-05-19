@@ -27,16 +27,6 @@ include_directories(
     ./include
 )
 
-add_executable(steering_driver
-        src/steering_driver.cpp
-        src/SteeringDriver.cpp
-        include/SteeringDriver.h
-        )
-target_link_libraries(steering_driver
-        ${catkin_LIBRARIES}
-        ${libserial_LIBRARIES}
-        )
-
 add_executable(encoder_odometry_node
         src/EncoderOdometryNode.cpp
         src/encoder_odometry_node.cpp

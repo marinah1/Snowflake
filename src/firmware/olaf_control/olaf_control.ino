@@ -19,11 +19,13 @@
  * the front wheels is determined from `angular z`, and the speed of the car by `linear x`
  * (the rest of the values are discarded)
  */
-
+#include <ros.h>
+#include <geometry_msgs/Twist.h>
 #include <SoftwareSerial.h>
 #include <stdlib.h>
 #include <Servo.h>
 #include <math.h>
+#include <std_msgs/String.h>
 
 // !!!!WARNING!!!!
 // DEBUGGING might affect performance and alter normal behaviour
@@ -32,19 +34,12 @@
 //#define DEBUG_MESSAGES
 // Uncomment this to enable PWM debug logging - PWM signals will be echoed
 //#define DEBUG_PWM
+#define DEBUG_SERIAL
 
 #define BAUD_RATE 9600
 
 // size of character buffer being passed over serial connection
 #define BUFFER_SIZE 7
-
-// Robot speed will be received in a char buffer with each value between 0 and 255
-// as a result, this assigns 128 as stop. Then:
-// 0 < speed < 128 is reverse
-// 128 < speed <= 255 is forward
-// 255 is then full speed forward, 0 is full speed backward
-#define UNMAPPED_STOP_SPEED 128
-#define MAPPED_STRAIGHT_ANGLE 90
 
 // Robot will keep executing the last command unless the period exceeds the SAFETY_TIMEOUT
 // SAFETY_TIMEOUT is in ms
@@ -54,28 +49,25 @@ void serial_read();
 void convert();
 void drive(int, int);
 
-// buffer inputss
-double linear_x = UNMAPPED_STOP_SPEED;
-double linear_y = UNMAPPED_STOP_SPEED;
-double linear_z = UNMAPPED_STOP_SPEED;
-double angular_x = MAPPED_STRAIGHT_ANGLE;
-double angular_y = MAPPED_STRAIGHT_ANGLE;
-double angular_z = MAPPED_STRAIGHT_ANGLE;
+// buffer inputs
+double linear_x = 0.0;
+double linear_y = 0.0;
+double linear_z = 0.0;
+double angular_x = 0.0;
+double angular_y = 0.0;
+double angular_z = 0.0;
 
 // motor pins
 const int MOTOR_PIN = A0;
 const int DIRECTION_PIN = A2;
 
-// defines start of buffer
-const char BUFFER_HEAD = 'B';
-
 // max and min linear speeds and stopping condition
-const int LINEAR_SPEED_MAX = 50;
-const int LINEAR_SPEED_MIN = -50;
+const double LINEAR_SPEED_MAX = 50.0;
+const double LINEAR_SPEED_MIN = -50.0;
 
 // max and min angular speeds and stopping condition
-const int ANGULAR_SPEED_MAX = 50;
-const int ANGULAR_SPEED_MIN = -50;
+const double ANGULAR_SPEED_MAX = 50.0;
+const double ANGULAR_SPEED_MIN = -50.0;
 
 // max and min wheel angles and stopping condition
 const int WHEEL_ANGLE_MAX = 25;
@@ -114,8 +106,35 @@ unsigned long currentMillis = 0;
 Servo motor;
 Servo direction_motor;
 
+ros::NodeHandle nh;
+
+#ifdef DEBUG_SERIAL
+  std_msgs::String debug_pub_msg;
+  ros::Publisher debug_pub("olaf_arduino", &debug_pub_msg);
+#endif
+
+void TwistCb( const geometry_msgs::Twist& twist_msg){
+
+    previousMillis = millis();
+
+    linear_x = twist_msg.linear.x;
+    angular_z = twist_msg.angular.z;
+
+#ifdef DEBUG_SERIAL
+    String msg = "linear_x: " + String(linear_x) + ", angular_z: " + String(angular_z);
+    char charmsg[100];
+    msg.toCharArray(charmsg, 100);
+    debug_pub_msg.data = charmsg;
+    debug_pub.publish(&debug_pub_msg);
+#endif
+
+    convert();
+}
+
+ros::Subscriber<geometry_msgs::Twist> sub("/cmd_vel", &TwistCb );
+
 void setup() {
-    Serial.begin(BAUD_RATE);
+    Serial.begin(57600);
 
     // Initialiase the Servo and Motor connections
     motor.attach(MOTOR_PIN, MIN_PWM, MAX_PWM);
@@ -124,39 +143,27 @@ void setup() {
     if (!checkWheelConstants()) {
         while(1);
     }
+
+    nh.initNode();
+    nh.subscribe(sub);
+
+#ifdef DEBUG_SERIAL
+    nh.advertise(debug_pub);
+#endif
+
 }
 
 void loop() {
-    serial_read();
-    convert();
+    nh.spinOnce();
+    check_timeout();
     drive(linear_x, angular_z);
 }
 
-void serial_read(){
-    // BUFFER_HEAD identifies the start of the buffer
-    if ( Serial.available() >= BUFFER_SIZE && Serial.read() == BUFFER_HEAD ) {
-        linear_x = Serial.read();
-        linear_y = Serial.read();
-        linear_z = Serial.read();
-        angular_x = Serial.read();
-        angular_y = Serial.read();
-        angular_z = Serial.read();
-        previousMillis = currentMillis;
-
-#ifdef DEBUG_MESSAGES
-        Serial.println("Got message");
-        Serial.print("Linear X:"); Serial.println(linear_x);
-        Serial.print("Linear Y:"); Serial.println(linear_y);
-        Serial.print("Linear Z:"); Serial.println(linear_z);
-        Serial.print("Angular X:"); Serial.println(angular_x);
-        Serial.print("Angular Y:"); Serial.println(angular_y);
-        Serial.print("Angular Z:"); Serial.println(angular_z);
-#endif
-    } else {
-        currentMillis = millis();
-        if(currentMillis - previousMillis > SAFETY_TIMEOUT){
-            linear_x = UNMAPPED_STOP_SPEED;
-        }
+void check_timeout() {
+    // if havent received twist message in a while, stop moving robot
+    currentMillis = millis();
+    if(currentMillis - previousMillis > SAFETY_TIMEOUT){
+        linear_x = 0.0;
     }
 }
 
@@ -182,9 +189,9 @@ int checkWheelConstants() {
 #ifdef DEBUG_MESSAGES
         Serial.println("Wheel constants are not accurate.");
 #endif
-        return -1;
+        return 0;
     }
-    return 0;
+    return 1;
 }
 
 int get_wheel_PWM(double linear_speed, double angular_speed) {
