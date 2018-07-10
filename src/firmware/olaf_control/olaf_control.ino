@@ -253,6 +253,14 @@ void drive(double linear_speed, double angular_speed){
     angle_PWM = get_wheel_PWM(linear_speed, angular_speed);
     velocity = pid_controller(linear_speed);
 
+#ifdef DEBUG_SERIAL
+    String msg = "velocity: " + String(velocity);
+    char charmsg[100];
+    msg.toCharArray(charmsg, 100);
+    debug_pub_msg.data = charmsg;
+    debug_pub.publish(&debug_pub_msg);
+#endif
+
     // Write the commands to the motor and the servo
     motor.writeMicroseconds(velocity);
     direction_motor.writeMicroseconds(angle_PWM);
